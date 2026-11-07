@@ -1,1 +1,67 @@
 
+name: Build debug APK
+on:
+  workflow_dispatch:
+    inputs:
+      abis:
+        description: "ABIs to include (comma separated)"
+        default: "arm64-v8a"
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+      - name: Locate project (extracted files, or an uploaded VoiceStudioAI zip)
+        id: locate
+        run: |
+          set -euo pipefail
+          if [ -f settings.gradle.kts ]; then
+            DIR=.
+          else
+            COUNT="$(ls VoiceStudioAI*.zip 2>/dev/null | wc -l)"
+            if [ "$COUNT" -eq 0 ]; then
+              echo "::error::No project found. Upload the VoiceStudioAI zip to the repository root."
+              exit 1
+            fi
+            if [ "$COUNT" -gt 1 ]; then
+              echo "::error::Found $COUNT VoiceStudioAI zips ($(ls VoiceStudioAI*.zip | tr '\n' ' ')). Delete the old ones so only one remains."
+              exit 1
+            fi
+            ZIP="$(ls VoiceStudioAI*.zip)"
+            echo "Unpacking $ZIP"
+            rm -rf _project && mkdir _project && unzip -q "$ZIP" -d _project
+            DIR="$(dirname "$(find _project -name settings.gradle.kts -print -quit)")"
+          fi
+          echo "Project directory: $DIR"
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+      - name: Build
+        working-directory: ${{ steps.locate.outputs.dir }}
+        run: bash scripts/ci-build.sh "${{ inputs.abis || 'arm64-v8a' }}"
+      - name: Upload APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: VoiceStudioAI-debug-apk
+          path: ${{ steps.locate.outputs.dir }}/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            ${{ steps.locate.outputs.dir }}/build-logs
+            ${{ steps.locate.outputs.dir }}/app/build/reports
+            ${{ steps.locate.outputs.dir }}/app/build/test-results
+          if-no-files-found: warn
+          retention-days: 14
